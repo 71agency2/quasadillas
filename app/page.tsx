@@ -8,286 +8,288 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-const CATEGORIES = ["Sandwich/Burger", "Accompagnement", "Boisson", "Dessert"];
+const CATEGORIES = ["Sandwich", "Burger", "Boisson", "Dessert"];
 
-export default function ClientMenuPage() {
-  // --- ÉTATS ---
+export default function ClientPage() {
   const [produits, setProduits] = useState<any[]>([]);
-  const [chargement, setChargement] = useState(true);
+  const [categorieActive, setCategorieActive] = useState(CATEGORIES[0]);
   
-  // Panier
-  const [panier, setPanier] = useState<{ produit: any; quantite: number }[]>([]);
+  const [panier, setPanier] = useState<any[]>([]);
   const [panierOuvert, setPanierOuvert] = useState(false);
   
-  // Formulaire de commande
+  const [produitOuvert, setProduitOuvert] = useState<any | null>(null);
+  const [supplementsCoches, setSupplementsCoches] = useState<any[]>([]);
+
   const [nomClient, setNomClient] = useState("");
   const [telephone, setTelephone] = useState("");
   const [adresse, setAdresse] = useState("");
-  const [commandeEnCours, setCommandeEnCours] = useState(false);
-  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [envoiEnCours, setEnvoiEnCours] = useState(false);
+  const [commandeValidee, setCommandeValidee] = useState(false);
+  
+  const [numeroCommande, setNumeroCommande] = useState<number | null>(null);
 
-  // Charger le menu au démarrage
   useEffect(() => {
     fetchProduits();
   }, []);
 
   async function fetchProduits() {
-    setChargement(true);
-    const { data, error } = await supabase.from("produits").select("*").order("id", { ascending: false });
-    if (!error) setProduits(data || []);
-    setChargement(false);
+    const { data } = await supabase.from("produits").select("*").order("id", { ascending: false });
+    if (data) setProduits(data);
   }
 
-  // --- GESTION DU PANIER ---
-  const ajouterAuPanier = (produit: any) => {
-    setPanier((prev) => {
-      const existant = prev.find((item) => item.produit.id === produit.id);
-      if (existant) {
-        return prev.map((item) =>
-          item.produit.id === produit.id ? { ...item, quantite: item.quantite + 1 } : item
-        );
-      }
-      return [...prev, { produit, quantite: 1 }];
-    });
-    // Petite animation ou alerte (optionnel)
+  const ouvrirOptionsProduit = (produit: any) => {
+    if (!produit.supplements || produit.supplements.length === 0) {
+      ajouterAuPanierDirect(produit, []);
+    } else {
+      setProduitOuvert(produit);
+      setSupplementsCoches([]);
+    }
   };
 
-  const retirerDuPanier = (produitId: number) => {
-    setPanier((prev) => prev.filter((item) => item.produit.id !== produitId));
+  const toggleSupplement = (supp: any) => {
+    if (supplementsCoches.some(s => s.nom === supp.nom)) {
+      setSupplementsCoches(supplementsCoches.filter(s => s.nom !== supp.nom));
+    } else {
+      setSupplementsCoches([...supplementsCoches, supp]);
+    }
   };
 
-  const changerQuantite = (produitId: number, delta: number) => {
-    setPanier((prev) =>
-      prev.map((item) => {
-        if (item.produit.id === produitId) {
-          const nouvelleQte = item.quantite + delta;
-          return nouvelleQte > 0 ? { ...item, quantite: nouvelleQte } : item;
-        }
-        return item;
-      })
-    );
+  const ajouterAuPanierDirect = (produit: any, supps: any[]) => {
+    const prixSupps = supps.reduce((total, s) => total + s.prix, 0);
+    const prixTotalItem = produit.prix + prixSupps;
+
+    const newItem = {
+      idUnique: Math.random().toString(36).substring(7),
+      produit_id: produit.id,
+      nom: produit.titre || produit.nom,
+      prixBase: produit.prix,
+      prixTotal: prixTotalItem,
+      supplements: supps
+    };
+
+    setPanier([...panier, newItem]);
+    setProduitOuvert(null); 
+    setPanierOuvert(true); 
   };
 
-  const totalPanier = panier.reduce((total, item) => total + item.produit.prix * item.quantite, 0);
-  const totalArticles = panier.reduce((total, item) => total + item.quantite, 0);
+  const retirerDuPanier = (idUnique: string) => {
+    setPanier(panier.filter(item => item.idUnique !== idUnique));
+    if (panier.length === 1) setPanierOuvert(false);
+  };
 
-  // --- SOUMISSION DE LA COMMANDE ---
+  const totalPanier = panier.reduce((total, item) => total + item.prixTotal, 0);
+
   const handleCommander = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (panier.length === 0) return;
-    setCommandeEnCours(true);
-    setMessage(null);
+    if (panier.length === 0) return alert("Votre panier est vide !");
+    setEnvoiEnCours(true);
 
-    // Créer un résumé textuel de la commande (ex: "2x Burger, 1x Coca")
-    const details = panier.map((item) => `${item.quantite}x ${item.produit.titre || item.produit.nom}`).join(", ");
+    const details = panier.map(item => {
+      let desc = `- ${item.nom}`;
+      if (item.supplements && item.supplements.length > 0) {
+        desc += ` (Extras: ${item.supplements.map((s:any) => s.nom).join(', ')})`;
+      }
+      return desc;
+    }).join('\n');
 
-    try {
-      const { error } = await supabase.from("commandes").insert([
-        {
-          nom_client: nomClient,
-          telephone_client: telephone,
-          adresse_livraison: adresse,
-          total: totalPanier,
-          details_commande: details,
-          statut: "en attente", // Par défaut
-        },
-      ]);
+    const { data, error } = await supabase.from("commandes").insert([{
+      nom_client: nomClient,
+      telephone_client: telephone,
+      adresse_livraison: adresse,
+      total: totalPanier,
+      details_commande: details,
+      statut: "en attente"
+    }]).select();
 
-      if (error) throw error;
-
-      setMessage({ type: "success", text: "✅ Commande envoyée avec succès ! Nous la préparons." });
-      setPanier([]); // Vider le panier
-      setNomClient(""); setTelephone(""); setAdresse(""); // Vider le formulaire
-      
-      // Fermer le panier après 3 secondes
-      setTimeout(() => {
-        setPanierOuvert(false);
-        setMessage(null);
-      }, 3000);
-
-    } catch (error: any) {
-      setMessage({ type: "error", text: "❌ Erreur : " + error.message });
-    } finally {
-      setCommandeEnCours(false);
+    setEnvoiEnCours(false);
+    
+    if (!error && data && data.length > 0) {
+      setNumeroCommande(data[0].id);
+      setCommandeValidee(true);
+      setPanier([]);
+      setNomClient(""); setTelephone(""); setAdresse("");
+    } else {
+      alert("Erreur : " + error?.message);
     }
   };
 
   return (
-    <div className="min-h-screen bg-black text-white font-sans pb-24">
+    <div className="min-h-screen bg-black text-white font-sans pb-32">
       
-      {/* HEADER / HERO SECTION */}
-      <header className="bg-zinc-950 border-b border-zinc-900 py-12 px-6 text-center relative overflow-hidden">
-        <div className="max-w-4xl mx-auto relative z-10">
-          <h1 className="text-5xl md:text-7xl font-black uppercase tracking-tighter mb-4">
-            FOOD <span className="text-red-600">PLUS</span>
-          </h1>
-          <p className="text-gray-400 text-lg md:text-xl font-medium tracking-wide">
-            Le meilleur fast-food directement livré chez vous.
-          </p>
-        </div>
+      {/* HEADER AVEC LOGO, SLOGAN ET BOUTON D'APPEL */}
+      <header className="bg-zinc-950 border-b border-zinc-800 pt-8 pb-6 px-4 text-center sticky top-0 z-10 shadow-2xl flex flex-col items-center justify-center">
+        <p className="text-gray-400 text-[10px] font-bold uppercase tracking-widest mb-2">Depuis 2011</p>
+        
+        {/* ⚠️ TON LOGO EST ICI : Remplace /logo.png par le nom de ton fichier si besoin */}
+        <img 
+          src="/logo.png" 
+          alt="Logo Food Plus" 
+          className="h-24 w-auto mb-3 object-contain"
+        />
+        
+        <p className="text-red-500 text-lg font-bold mb-4" dir="rtl">“كل عضّة فيها حكاية”</p>
+
+        {/* ⚠️ TON NUMÉRO DE TÉLÉPHONE EST ICI : Remplace 0555000000 par ton vrai numéro */}
+        <a href="tel:0553940214" className="bg-zinc-900 border border-zinc-800 text-white px-6 py-3 rounded-full font-bold flex items-center gap-3 hover:border-red-500 active:scale-95 transition-all shadow-lg">
+          <span className="text-xl">📞</span> Reclamation!! : <span className="text-red-500 tracking-wider">0553940214</span>
+        </a>
       </header>
 
-      {/* MENU PAR CATÉGORIES */}
-      <main className="max-w-6xl mx-auto px-6 py-12">
-        {chargement ? (
-          <div className="text-center text-gray-500 py-20 animate-pulse text-xl font-bold">Chargement du menu délicieux...</div>
-        ) : produits.length === 0 ? (
-          <div className="text-center text-gray-500 py-20">Le menu est en cours de préparation. Revenez vite !</div>
-        ) : (
-          <div className="space-y-16">
-            {CATEGORIES.map((cat) => {
-              const produitsDeLaCategorie = produits.filter((p) => (p.categorie || CATEGORIES[0]) === cat);
-              
-              if (produitsDeLaCategorie.length === 0) return null;
+      {/* NAVIGATION CATÉGORIES */}
+      <nav className="flex overflow-x-auto gap-3 p-4 sticky top-53.75 z-10 bg-black/80 backdrop-blur-md [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] scrollbar-none">
+        {CATEGORIES.map(cat => (
+          <button 
+            key={cat} 
+            onClick={() => setCategorieActive(cat)}
+            className={`shrink-0 px-6 py-3 rounded-full font-bold uppercase text-sm tracking-wider transition-all border ${
+              categorieActive === cat 
+              ? "bg-red-600 text-white border-red-600 shadow-lg shadow-red-600/30" 
+              : "bg-zinc-900 text-gray-400 border-zinc-800 hover:border-zinc-700"
+            }`}
+          >
+            {cat}
+          </button>
+        ))}
+      </nav>
 
-              return (
-                <section key={cat}>
-                  <h2 className="text-3xl font-black text-white border-l-4 border-red-600 pl-4 mb-8 uppercase tracking-widest">
-                    {cat}
-                  </h2>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {produitsDeLaCategorie.map((produit) => (
-                      <div key={produit.id} className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden hover:border-red-600/50 transition-colors group flex flex-col">
-                        {/* Image */}
-                        <div className="h-48 w-full bg-zinc-950 relative overflow-hidden">
-                          {produit.image_url ? (
-                            <img src={produit.image_url} alt={produit.titre} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center text-zinc-800 text-5xl">🍔</div>
-                          )}
-                        </div>
-                        {/* Infos */}
-                        <div className="p-5 flex flex-col grow">
-                          <div className="flex justify-between items-start mb-2 gap-4">
-                            <h3 className="font-bold text-xl uppercase leading-tight">{produit.titre || produit.nom}</h3>
-                            <span className="text-red-500 font-black whitespace-nowrap">{produit.prix} DA</span>
-                          </div>
-                          <p className="text-gray-400 text-sm mb-6 grow line-clamp-2">{produit.description}</p>
-                          <button 
-                            onClick={() => ajouterAuPanier(produit)}
-                            className="w-full bg-zinc-800 hover:bg-red-600 text-white font-bold py-3 rounded-xl transition-colors uppercase tracking-wider text-sm"
-                          >
-                            Ajouter au panier
-                          </button>
-                        </div>
-                      </div>
-                    ))}
+      {/* LISTE PRODUITS */}
+      <main className="p-4 max-w-5xl mx-auto mt-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          {produits.filter(p => (p.categorie || "Sandwich") === categorieActive).map(produit => (
+            <div key={produit.id} onClick={() => ouvrirOptionsProduit(produit)} className="bg-zinc-900 border border-zinc-800 rounded-3xl overflow-hidden cursor-pointer active:scale-[0.98] transition-transform">
+              {produit.image_url ? (
+                <img src={produit.image_url} alt={produit.titre} className="w-full h-56 object-cover" />
+              ) : (
+                <div className="w-full h-56 bg-zinc-950 flex items-center justify-center text-5xl">🍔</div>
+              )}
+              <div className="p-5">
+                <div className="flex justify-between items-start mb-2">
+                  <h3 className="text-xl font-bold text-white">{produit.titre || produit.nom}</h3>
+                  <span className="bg-red-600/20 text-red-500 px-3 py-1 rounded-lg font-black text-lg whitespace-nowrap ml-3 border border-red-500/20">{produit.prix} DA</span>
+                </div>
+                <p className="text-sm text-gray-400 line-clamp-2 mt-2">{produit.description}</p>
+                {produit.supplements && produit.supplements.length > 0 && (
+                  <div className="mt-4 flex items-center gap-2">
+                    <span className="bg-amber-500/20 text-amber-500 px-2 py-1 rounded text-xs font-bold uppercase tracking-widest">✨ Personnalisable</span>
                   </div>
-                </section>
-              );
-            })}
-          </div>
-        )}
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
       </main>
 
+      {/* MODAL SUPPLÉMENTS */}
+      {produitOuvert && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center sm:p-4">
+          <div className="bg-zinc-900 w-full max-w-md border-t sm:border border-zinc-800 rounded-t-4xl sm:rounded-3xl overflow-hidden shadow-2xl max-h-[90vh] flex flex-col">
+            <div className="relative shrink-0">
+              {produitOuvert.image_url && <img src={produitOuvert.image_url} alt="Image" className="w-full h-48 object-cover" />}
+              <button onClick={() => setProduitOuvert(null)} className="absolute top-4 right-4 bg-black/50 backdrop-blur text-white p-2 rounded-full w-10 h-10 flex items-center justify-center">✕</button>
+            </div>
+            
+            <div className="p-6 overflow-y-auto">
+              <h2 className="text-2xl font-bold text-white mb-1">{produitOuvert.titre || produitOuvert.nom}</h2>
+              <p className="text-red-500 font-black mb-6 text-xl">{produitOuvert.prix} DA</p>
+              <h3 className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-4 border-b border-zinc-800 pb-2">Personnaliser</h3>
+              <div className="space-y-3 mb-6">
+                {produitOuvert.supplements.map((supp: any, idx: number) => {
+                  const estCoche = supplementsCoches.some(s => s.nom === supp.nom);
+                  return (
+                    <div key={idx} onClick={() => toggleSupplement(supp)} className={`flex items-center justify-between p-4 rounded-2xl border cursor-pointer active:scale-[0.98] transition-all ${estCoche ? "bg-red-600/10 border-red-500 shadow-inner shadow-red-500/10" : "bg-zinc-950 border-zinc-800"}`}>
+                      <div className="flex items-center gap-4">
+                        <div className={`w-6 h-6 rounded-lg flex items-center justify-center border-2 transition-colors ${estCoche ? "bg-red-600 border-red-600" : "bg-black border-zinc-700"}`}>
+                          {estCoche && <span className="text-white text-sm font-bold">✓</span>}
+                        </div>
+                        <span className="font-bold text-white text-lg">{supp.nom}</span>
+                      </div>
+                      <span className="text-gray-400 font-black">+{supp.prix} DA</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="p-6 border-t border-zinc-800 bg-zinc-950 shrink-0">
+              <button onClick={() => ajouterAuPanierDirect(produitOuvert, supplementsCoches)} className="w-full bg-red-600 text-white font-black py-5 rounded-2xl uppercase text-sm shadow-xl shadow-red-600/20 flex justify-between px-6 active:scale-[0.98] transition-transform">
+                <span>Ajouter au panier</span>
+                <span className="bg-white text-red-600 px-3 py-1 rounded-lg">{produitOuvert.prix + supplementsCoches.reduce((t, s) => t + s.prix, 0)} DA</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* BOUTON FLOTTANT PANIER */}
-      {totalArticles > 0 && (
-        <button 
-          onClick={() => setPanierOuvert(true)}
-          className="fixed bottom-6 right-6 md:bottom-10 md:right-10 bg-red-600 text-white p-4 rounded-full shadow-2xl shadow-red-600/40 hover:scale-105 transition-transform z-40 flex items-center gap-3 font-bold"
-        >
-          <span className="text-2xl">🛒</span>
-          <span className="bg-white text-red-600 px-3 py-1 rounded-full text-sm">{totalArticles}</span>
-          <span className="hidden md:inline mr-2">{totalPanier} DA</span>
+      {panier.length > 0 && !panierOuvert && !produitOuvert && (
+        <button onClick={() => setPanierOuvert(true)} className="fixed bottom-6 left-1/2 -translate-x-1/2 w-[92%] max-w-md bg-green-600 text-white font-black py-5 px-6 rounded-2xl shadow-2xl shadow-green-600/30 flex justify-between items-center z-40 active:scale-[0.98] transition-transform uppercase tracking-wider text-sm">
+          <span className="bg-white text-green-600 w-8 h-8 flex items-center justify-center rounded-full">{panier.length}</span>
+          <span>Voir mon panier</span>
+          <span>{totalPanier} DA</span>
         </button>
       )}
 
-      {/* MODAL PANIER & CHECKOUT */}
+      {/* MODAL PANIER */}
       {panierOuvert && (
-        <div className="fixed inset-0 z-50 flex justify-end">
-          {/* Overlay sombre */}
-          <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setPanierOuvert(false)}></div>
-          
-          {/* Tiroir */}
-          <div className="relative w-full max-w-md bg-zinc-950 h-full flex flex-col shadow-2xl border-l border-zinc-800 animate-slide-in">
-            <div className="p-6 border-b border-zinc-800 flex justify-between items-center bg-zinc-900">
-              <h2 className="text-2xl font-black uppercase tracking-wider text-white">Mon Panier</h2>
-              <button onClick={() => setPanierOuvert(false)} className="text-gray-400 hover:text-white text-2xl">✕</button>
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 flex items-end sm:items-center justify-center sm:p-4">
+          <div className="bg-zinc-900 w-full max-w-md border-t sm:border border-zinc-800 rounded-t-4xl sm:rounded-3xl overflow-hidden shadow-2xl max-h-[95vh] flex flex-col">
+            <div className="p-6 border-b border-zinc-800 flex justify-between items-center bg-zinc-950 shrink-0">
+              <h2 className="text-xl font-bold uppercase tracking-wider text-white">🛍️ Mon Panier</h2>
+              <button onClick={() => setPanierOuvert(false)} className="text-gray-400 bg-zinc-900 w-10 h-10 rounded-full flex items-center justify-center">✕</button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-6">
-              {panier.length === 0 ? (
-                <div className="text-center text-gray-500 mt-20">
-                  <span className="text-6xl block mb-4">🛒</span>
-                  Votre panier est vide.
+            {commandeValidee ? (
+              <div className="p-10 text-center overflow-y-auto">
+                <span className="text-6xl block mb-6">✅</span>
+                <h3 className="text-2xl font-black text-green-500 mb-6 uppercase">Commande Envoyée !</h3>
+                
+                <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-6 mb-8 inline-block shadow-inner">
+                  <p className="text-gray-500 text-xs uppercase tracking-widest mb-2">N° de commande</p>
+                  <p className="text-5xl font-black text-white">#{numeroCommande}</p>
                 </div>
-              ) : (
-                <div className="space-y-6">
-                  {/* Liste des articles */}
-                  <div className="space-y-4 mb-8">
-                    {panier.map((item) => (
-                      <div key={item.produit.id} className="flex gap-4 items-center bg-zinc-900 p-3 rounded-xl border border-zinc-800">
-                        {item.produit.image_url && (
-                          <img src={item.produit.image_url} alt={item.produit.titre} className="w-16 h-16 object-cover rounded-lg" />
+
+                <p className="text-gray-400 mb-8 font-medium">L'équipe prépare votre repas. Le livreur vous contactera très vite !</p>
+                <button onClick={() => { setCommandeValidee(false); setPanierOuvert(false); setNumeroCommande(null); }} className="bg-zinc-800 text-white font-bold py-4 px-8 rounded-2xl uppercase w-full">Retour au menu</button>
+              </div>
+            ) : (
+              <div className="p-6 overflow-y-auto flex-1">
+                <div className="space-y-4 mb-8">
+                  {panier.map((item) => (
+                    <div key={item.idUnique} className="flex justify-between items-center bg-zinc-950 border border-zinc-800 p-4 rounded-2xl">
+                      <div className="flex-1">
+                        <h4 className="font-bold text-white text-lg">{item.nom}</h4>
+                        {item.supplements && item.supplements.length > 0 && (
+                          <p className="text-xs text-gray-500 leading-tight mt-1 font-medium">
+                            + {item.supplements.map((s:any) => s.nom).join(', ')}
+                          </p>
                         )}
-                        <div className="grow">
-                          <h4 className="font-bold text-sm uppercase">{item.produit.titre || item.produit.nom}</h4>
-                          <p className="text-red-500 font-bold text-sm">{item.produit.prix * item.quantite} DA</p>
-                        </div>
-                        <div className="flex items-center gap-2 bg-zinc-950 rounded-lg border border-zinc-800 p-1">
-                          <button onClick={() => changerQuantite(item.produit.id, -1)} className="px-2 text-gray-400 hover:text-white">-</button>
-                          <span className="font-bold text-sm w-4 text-center">{item.quantite}</span>
-                          <button onClick={() => changerQuantite(item.produit.id, 1)} className="px-2 text-gray-400 hover:text-white">+</button>
-                        </div>
-                        <button onClick={() => retirerDuPanier(item.produit.id)} className="text-zinc-600 hover:text-red-500 ml-2">🗑️</button>
+                        <p className="text-red-500 font-black mt-2">{item.prixTotal} DA</p>
                       </div>
-                    ))}
-                  </div>
-
-                  {/* Formulaire Client */}
-                  <div className="bg-zinc-900 p-5 rounded-2xl border border-zinc-800">
-                    <h3 className="font-bold uppercase tracking-wider mb-4 text-red-500 border-b border-zinc-800 pb-2">Détails de livraison</h3>
-                    
-                    {message && (
-                      <div className={`p-3 rounded-lg mb-4 text-sm font-semibold border ${message.type === "success" ? "bg-green-950/40 border-green-500 text-green-400" : "bg-red-950/40 border-red-500 text-red-400"}`}>
-                        {message.text}
-                      </div>
-                    )}
-
-                    {!message?.text.includes("✅") && (
-                      <form onSubmit={handleCommander} className="space-y-4">
-                        <div>
-                          <label className="block text-xs font-bold uppercase text-gray-400 mb-1">Nom et Prénom</label>
-                          <input type="text" required value={nomClient} onChange={(e) => setNomClient(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-white focus:border-red-600 outline-none text-sm" placeholder="Ex: Ali Ammar" />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-bold uppercase text-gray-400 mb-1">Téléphone</label>
-                          <input type="tel" required value={telephone} onChange={(e) => setTelephone(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-white focus:border-red-600 outline-none text-sm" placeholder="Ex: 0550 12 34 56" />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-bold uppercase text-gray-400 mb-1">Adresse complète</label>
-                          <textarea required rows={2} value={adresse} onChange={(e) => setAdresse(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-white focus:border-red-600 outline-none text-sm" placeholder="Votre adresse exacte..."></textarea>
-                        </div>
-                        
-                        <div className="pt-4 border-t border-zinc-800">
-                          <div className="flex justify-between items-center mb-4">
-                            <span className="text-gray-400 font-bold uppercase">Total à payer</span>
-                            <span className="text-2xl font-black text-red-500">{totalPanier} DA</span>
-                          </div>
-                          <button type="submit" disabled={commandeEnCours} className="w-full bg-red-600 hover:bg-red-700 disabled:bg-zinc-800 text-white font-black py-4 rounded-xl transition-colors uppercase tracking-widest">
-                            {commandeEnCours ? "Envoi en cours..." : "Confirmer la commande"}
-                          </button>
-                        </div>
-                      </form>
-                    )}
-                  </div>
+                      <button onClick={() => retirerDuPanier(item.idUnique)} className="text-red-500 bg-red-500/10 p-3 rounded-xl ml-4 active:scale-95 transition-transform">🗑️</button>
+                    </div>
+                  ))}
                 </div>
-              )}
-            </div>
+
+                <div className="flex justify-between items-end border-t border-zinc-800 pt-6 mb-8">
+                  <span className="text-gray-400 font-bold uppercase tracking-widest text-sm">Total à payer</span>
+                  <span className="text-4xl font-black text-red-500">{totalPanier} DA</span>
+                </div>
+
+                <form onSubmit={handleCommander} className="space-y-4 pb-6">
+                  <h3 className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-4 border-b border-zinc-800 pb-2">Où livrer ?</h3>
+                  <input type="text" required placeholder="Nom complet" value={nomClient} onChange={(e) => setNomClient(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-2xl p-4 text-white outline-none focus:border-red-600 font-medium" />
+                  <input type="tel" required placeholder="N° Téléphone" value={telephone} onChange={(e) => setTelephone(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-2xl p-4 text-white outline-none focus:border-red-600 font-medium" />
+                  <textarea required rows={2} placeholder="Adresse complète..." value={adresse} onChange={(e) => setAdresse(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-2xl p-4 text-white outline-none focus:border-red-600 font-medium" />
+                  
+                  <button type="submit" disabled={envoiEnCours} className="w-full bg-red-600 text-white font-black py-5 rounded-2xl uppercase text-sm mt-4 shadow-xl shadow-red-600/20 active:scale-[0.98] transition-transform">
+                    {envoiEnCours ? "Transmission..." : "🚀 Confirmer la commande"}
+                  </button>
+                </form>
+              </div>
+            )}
           </div>
         </div>
       )}
-      
-      {/* Configuration d'une petite animation CSS pour le tiroir (à ajouter dans ton globals.css idéalement, mais fonctionne sans) */}
-      <style dangerouslySetInnerHTML={{__html: `
-        @keyframes slide-in {
-          from { transform: translateX(100%); }
-          to { transform: translateX(0); }
-        }
-        .animate-slide-in {
-          animation: slide-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-        }
-      `}} />
     </div>
   );
 }
