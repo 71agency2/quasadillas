@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Pizza Delivery",
-  description: "Chaud, Rapide & Délicieux",
+  title: "Food Plus",
+  description: "Depuis 2011",
 };
 
 export default function RootLayout({
