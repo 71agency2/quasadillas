@@ -125,7 +125,7 @@ export default function ClientPage() {
           </div>
         </div>
         
-        <a href="tel:0553940214" className="flex items-center gap-2 group active:scale-95 transition-all shrink-0">
+        <a href="tel:0556458402" className="flex items-center gap-2 group active:scale-95 transition-all shrink-0">
           <span className="text-red-500 font-bold text-[10px] sm:text-xs uppercase tracking-widest text-right leading-tight">
             Réclamation
           </span>
