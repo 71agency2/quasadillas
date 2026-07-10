@@ -1,124 +1,103 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, FormEvent } from "react";
 import { createClient } from "@supabase/supabase-js";
 
-// Connexion à Supabase
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export default function LivreurPage() {
-  // --- ÉTATS D'AUTHENTIFICATION ---
-  const [livreur, setLivreur] = useState<{ id: number; nom: string } | null>(null);
-  const [saisieTelephone, setSaisieTelephone] = useState("");
-  const [saisieMotDePasse, setSaisieMotDePasse] = useState("");
-  const [chargementAuth, setChargementAuth] = useState(false);
-  const [erreurAuth, setErreurAuth] = useState("");
-
-  // --- ÉTATS COMMANDES ---
+  const [estAuthentifie, setEstAuthentifie] = useState(false);
+  const [telephone, setTelephone] = useState("");
+  const [motDePasse, setMotDePasse] = useState("");
+  
+  const [livreurInfo, setLivreurInfo] = useState<any>(null);
   const [commandes, setCommandes] = useState<any[]>([]);
-  const [chargementCommandes, setChargementCommandes] = useState(false);
-  const [ongletActif, setOngletActif] = useState<"en_route" | "livre">("en_route");
+  const [chargement, setChargement] = useState(false);
 
-  // Vérifier si le livreur est déjà connecté au chargement
+  // Vérifier si le livreur est déjà connecté via le localStorage
   useEffect(() => {
-    const sessionSauvegardee = localStorage.getItem("livreurSession");
-    if (sessionSauvegardee) {
-      setLivreur(JSON.parse(sessionSauvegardee));
+    const savedLivreur = localStorage.getItem("livreurInfo");
+    if (savedLivreur) {
+      const data = JSON.parse(savedLivreur);
+      setLivreurInfo(data);
+      setEstAuthentifie(true);
+      fetchMesCommandes(data.id);
     }
   }, []);
 
-  // Charger les commandes dès que le livreur est connecté
-  useEffect(() => {
-    if (livreur) {
-      fetchCommandesLivreur();
-    }
-  }, [livreur]);
-
-  // --- FONCTION DE CONNEXION ---
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleLogin = async (e: FormEvent) => {
     e.preventDefault();
-    setChargementAuth(true);
-    setErreurAuth("");
-
+    setChargement(true);
+    
+    // Requête pour vérifier l'existence du livreur
     const { data, error } = await supabase
       .from("livreurs")
       .select("*")
-      .eq("telephone", saisieTelephone)
-      .eq("mot_de_passe", saisieMotDePasse)
+      .eq("telephone", telephone)
+      .eq("mot_de_passe", motDePasse)
       .single();
 
-    setChargementAuth(false);
+    setChargement(false);
 
-    if (error || !data) {
-      setErreurAuth("Numéro de téléphone ou mot de passe incorrect.");
+    if (data) {
+      setLivreurInfo(data);
+      setEstAuthentifie(true);
+      localStorage.setItem("livreurInfo", JSON.stringify(data));
+      fetchMesCommandes(data.id);
     } else {
-      const sessionData = { id: data.id, nom: data.nom };
-      setLivreur(sessionData);
-      localStorage.setItem("livreurSession", JSON.stringify(sessionData));
+      alert("❌ Numéro ou mot de passe incorrect");
     }
   };
 
-  // --- FONCTION DE DÉCONNEXION ---
   const handleLogout = () => {
-    setLivreur(null);
-    setCommandes([]);
-    localStorage.removeItem("livreurSession");
+    localStorage.removeItem("livreurInfo");
+    setEstAuthentifie(false);
+    setLivreurInfo(null);
+    setTelephone("");
+    setMotDePasse("");
   };
 
-  // --- RÉCUPÉRATION DES COMMANDES DU LIVREUR ---
-  async function fetchCommandesLivreur() {
-    if (!livreur) return;
-    setChargementCommandes(true);
-    
-    // On récupère toutes les commandes assignées à ce livreur spécifique
-    const { data, error } = await supabase
+  const fetchMesCommandes = async (idLivreur: number) => {
+    setChargement(true);
+    const { data } = await supabase
       .from("commandes")
       .select("*")
-      .eq("livreur_id", livreur.id)
+      .eq("livreur_id", idLivreur)
+      .in("statut", ["en route", "livré"]) // On affiche les encours et l'historique récent
       .order("id", { ascending: false });
+      
+    if (data) setCommandes(data);
+    setChargement(false);
+  };
 
-    if (!error && data) {
-      setCommandes(data);
-    }
-    setChargementCommandes(false);
-  }
+  const marquerCommeLivre = async (commandeId: number) => {
+    if (!window.confirm("Avez-vous bien remis cette commande au client et encaissé l'argent ?")) return;
+    
+    await supabase.from("commandes").update({ statut: "livré" }).eq("id", commandeId);
+    
+    // Rafraichir la liste
+    if (livreurInfo) fetchMesCommandes(livreurInfo.id);
+  };
 
-  // --- MARQUER UNE COMMANDE COMME LIVRÉE ---
-  async function marquerCommeLivre(idCommande: number) {
-    if (!window.confirm("Confirmer la livraison de cette commande ?")) return;
-
-    const { error } = await supabase
-      .from("commandes")
-      .update({ statut: "livré" })
-      .eq("id", idCommande);
-
-    if (!error) {
-      fetchCommandesLivreur(); // Rafraîchir la liste
-    } else {
-      alert("Erreur lors de la mise à jour : " + error.message);
-    }
-  }
-
-  // ==========================================
-  // ÉCRAN DE CONNEXION (Si non connecté)
-  // ==========================================
-  if (!livreur) {
+  // --- ECRAN DE CONNEXION ---
+  if (!estAuthentifie) {
     return (
-      <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center p-6 font-sans">
+      <div className="min-h-screen bg-zinc-950 text-white flex flex-col items-center justify-center p-6 font-sans">
         <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-3xl shadow-2xl w-full max-w-sm text-center">
-          <img src="/logo.png" alt="Logo" className="h-20 w-auto mx-auto mb-4 object-contain" />
-          <h1 className="text-2xl font-black uppercase mb-1">Espace <span className="text-red-600">Livreur</span></h1>
-          <p className="text-gray-400 text-xs mb-6 font-bold uppercase tracking-widest">Food Plus Delivery</p>
-          
-          {erreurAuth && <div className="bg-red-500/10 border border-red-500 text-red-500 text-sm p-3 rounded-lg mb-4">{erreurAuth}</div>}
+          <div className="text-5xl mb-4">🛵</div>
+          <h1 className="text-2xl font-black uppercase mb-6 tracking-wider">Espace <span className="text-purple-500">Livreur</span></h1>
           
           <form onSubmit={handleLogin} className="space-y-4">
-            <input type="tel" required placeholder="N° de Téléphone" value={saisieTelephone} onChange={(e) => setSaisieTelephone(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-4 text-white text-center tracking-wider focus:border-red-600 outline-none" />
-            <input type="password" required placeholder="Mot de passe" value={saisieMotDePasse} onChange={(e) => setSaisieMotDePasse(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-4 text-white text-center tracking-widest focus:border-red-600 outline-none" />
-            <button type="submit" disabled={chargementAuth} className="w-full bg-red-600 hover:bg-red-700 text-white font-black py-4 rounded-xl uppercase tracking-wide mt-2 shadow-xl shadow-red-600/20 active:scale-[0.98] transition-transform">
-              {chargementAuth ? "Connexion..." : "Se connecter"}
+            <div>
+              <input type="tel" required placeholder="Numéro de téléphone" value={telephone} onChange={(e) => setTelephone(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-4 text-white outline-none focus:border-purple-500 transition-colors" />
+            </div>
+            <div>
+              <input type="password" required placeholder="Mot de passe" value={motDePasse} onChange={(e) => setMotDePasse(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-4 text-white outline-none focus:border-purple-500 transition-colors font-mono" />
+            </div>
+            <button type="submit" disabled={chargement} className="w-full bg-purple-600 hover:bg-purple-700 text-white font-black py-4 rounded-xl uppercase tracking-widest mt-2">
+              {chargement ? "Connexion..." : "Se connecter"}
             </button>
           </form>
         </div>
@@ -126,128 +105,84 @@ export default function LivreurPage() {
     );
   }
 
-  // ==========================================
-  // TABLEAU DE BORD LIVREUR (Si connecté)
-  // ==========================================
-  
-  // Filtrer les commandes pour l'affichage des onglets
+  // --- ECRAN PRINCIPAL (DASHBOARD LIVREUR) ---
   const commandesEnRoute = commandes.filter(c => c.statut === "en route");
   const commandesLivrees = commandes.filter(c => c.statut === "livré");
-  const commandesAffichees = ongletActif === "en_route" ? commandesEnRoute : commandesLivrees;
 
   return (
-    <div className="min-h-screen bg-black text-white font-sans pb-24">
-      
-      {/* HEADER LIVREUR */}
-      <header className="bg-zinc-950 border-b border-zinc-900 p-4 sticky top-0 z-20 flex justify-between items-center shadow-lg">
-        <div className="flex items-center gap-3">
-          <div className="bg-red-600 w-10 h-10 rounded-full flex items-center justify-center text-xl shadow-lg shadow-red-600/30">🛵</div>
-          <div>
-            <p className="text-xs text-gray-500 uppercase tracking-widest font-bold">Livreur Actif</p>
-            <p className="font-bold text-white leading-tight">{livreur.nom}</p>
-          </div>
+    <div className="min-h-screen bg-zinc-950 text-white p-4 font-sans pb-24">
+      {/* En-tête */}
+      <header className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 mb-6 flex justify-between items-center shadow-lg">
+        <div>
+          <p className="text-xs text-gray-400 uppercase tracking-widest font-bold">Connecté en tant que</p>
+          <h2 className="text-xl font-black text-white">{livreurInfo?.nom}</h2>
         </div>
-        <button onClick={handleLogout} className="bg-zinc-900 border border-zinc-800 text-gray-400 p-2 rounded-xl text-xs font-bold uppercase hover:text-white active:scale-95 transition-all">Quitter</button>
+        <button onClick={handleLogout} className="bg-red-500/10 text-red-500 font-bold px-4 py-2 rounded-xl text-sm border border-red-500/20">Quitter</button>
       </header>
 
-      {/* ONGLETS */}
-      <div className="flex p-4 gap-3">
-        <button onClick={() => setOngletActif("en_route")} className={`flex-1 py-3 rounded-2xl font-black uppercase text-xs tracking-wider transition-all ${ongletActif === "en_route" ? "bg-red-600 text-white shadow-xl shadow-red-600/20" : "bg-zinc-900 text-gray-500"}`}>
-          📦 À Livrer ({commandesEnRoute.length})
-        </button>
-        <button onClick={() => setOngletActif("livre")} className={`flex-1 py-3 rounded-2xl font-black uppercase text-xs tracking-wider transition-all ${ongletActif === "livre" ? "bg-green-600 text-white shadow-xl shadow-green-600/20" : "bg-zinc-900 text-gray-500"}`}>
-          ✅ Historique
-        </button>
+      {/* Résumé */}
+      <div className="grid grid-cols-2 gap-4 mb-8">
+        <div className="bg-purple-600/20 border border-purple-500/30 rounded-2xl p-4 text-center">
+          <span className="text-3xl font-black text-purple-400 block mb-1">{commandesEnRoute.length}</span>
+          <span className="text-xs uppercase font-bold text-purple-300">À Livrer</span>
+        </div>
+        <div className="bg-green-600/20 border border-green-500/30 rounded-2xl p-4 text-center">
+          <span className="text-3xl font-black text-green-400 block mb-1">{commandesLivrees.length}</span>
+          <span className="text-xs uppercase font-bold text-green-300">Déjà Livrées</span>
+        </div>
       </div>
 
-      <div className="px-4 flex justify-end mb-2">
-        <button onClick={fetchCommandesLivreur} className="text-xs text-gray-400 font-bold uppercase flex items-center gap-1 active:scale-95">
-          <span>🔄 Rafraîchir</span>
-        </button>
+      <div className="flex justify-between items-center mb-4">
+        <h3 className="text-lg font-black uppercase tracking-widest text-gray-300">Vos courses actuelles</h3>
+        <button onClick={() => fetchMesCommandes(livreurInfo?.id)} className="text-sm bg-zinc-900 px-3 py-1 rounded-lg text-gray-400 border border-zinc-800">🔄 Actu</button>
       </div>
 
-      {/* LISTE DES COMMANDES */}
-      <main className="px-4">
-        {chargementCommandes ? (
-          <p className="text-center text-gray-500 py-10 animate-pulse">Chargement de vos courses...</p>
-        ) : commandesAffichees.length === 0 ? (
-          <div className="text-center py-16 bg-zinc-900/50 rounded-3xl border border-zinc-800/50 mt-4">
-            <span className="text-4xl block mb-3">💨</span>
-            <p className="text-gray-400 font-bold">Aucune course pour le moment.</p>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {commandesAffichees.map(cmd => (
-              <div key={cmd.id} className={`bg-zinc-950 border p-5 rounded-3xl shadow-xl relative overflow-hidden ${cmd.statut === "en route" ? "border-red-500/30" : "border-zinc-800 opacity-70"}`}>
-                
-                {/* Liseré de couleur sur le côté gauche pour indiquer le statut */}
-                <div className={`absolute left-0 top-0 bottom-0 w-1 ${cmd.statut === "en route" ? "bg-red-500" : "bg-green-500"}`}></div>
-
-                {/* EN-TÊTE CARTE */}
-                <div className="flex justify-between items-start mb-4">
-                  <div>
-                    <span className="text-xs font-mono bg-zinc-900 text-gray-400 px-2 py-1 rounded-lg"># {cmd.id}</span>
-                    <h3 className="font-black text-xl text-white mt-1">{cmd.nom_client}</h3>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-[10px] text-gray-500 uppercase font-bold tracking-widest block">À Encaisser</span>
-                    <span className={`text-2xl font-black block ${cmd.statut === "en route" ? "text-red-500" : "text-green-500"}`}>{cmd.total} DA</span>
-                  </div>
-                </div>
-
-                {/* INFOS CONTACT & ADRESSE */}
-                <div className="bg-zinc-900 rounded-2xl p-4 mb-4 space-y-3">
-                  <div className="flex items-start gap-3">
-                    <span className="text-lg mt-0.5">📍</span>
-                    <div>
-                      <span className="text-[10px] text-gray-500 uppercase font-bold tracking-widest block">Adresse de livraison</span>
-                      <p className="font-medium text-white">{cmd.adresse_livraison || cmd.adresse}</p>
-                    </div>
-                  </div>
-                  
-                  <div className="w-full h-px bg-zinc-800"></div>
-
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <span className="text-lg">📞</span>
-                      <div>
-                        <span className="text-[10px] text-gray-500 uppercase font-bold tracking-widest block">Téléphone</span>
-                        <p className="font-bold text-white">{cmd.telephone_client || cmd.telephone}</p>
-                      </div>
-                    </div>
-                    {/* BOUTON APPEL RAPIDE */}
-                    {cmd.statut === "en route" && (
-                      <a href={`tel:${cmd.telephone_client || cmd.telephone}`} className="bg-green-600/20 text-green-500 border border-green-500/30 p-2 rounded-xl active:scale-95 transition-transform">
-                        Appeler
-                      </a>
-                    )}
-                  </div>
-                </div>
-
-                {/* DÉTAILS DE LA COMMANDE ET NOTE (whitespace-pre-wrap essentiel ici !) */}
-                <div className="mb-5">
-                  <p className="text-xs text-gray-500 uppercase font-bold mb-2">Contenu du sac :</p>
-                  <div className="bg-black/50 border border-zinc-800/50 rounded-xl p-4">
-                    <p className="text-sm text-gray-300 font-medium whitespace-pre-wrap leading-relaxed">{cmd.details_commande}</p>
-                  </div>
-                </div>
-
-                {/* BOUTON D'ACTION */}
-                {cmd.statut === "en route" && (
-                  <button onClick={() => marquerCommeLivre(cmd.id)} className="w-full bg-red-600 text-white font-black py-4 rounded-xl uppercase tracking-wider shadow-lg shadow-red-600/20 active:scale-[0.98] transition-transform">
-                    ✅ Valider la livraison
-                  </button>
-                )}
-                {cmd.statut === "livré" && (
-                  <div className="w-full bg-zinc-900 text-green-500 font-black py-3 rounded-xl uppercase tracking-wider text-center text-sm flex items-center justify-center gap-2">
-                    <span>✔️ Livré avec succès</span>
-                  </div>
-                )}
+      {chargement && commandes.length === 0 ? (
+        <div className="text-center py-10 text-gray-500 animate-pulse font-bold">Mise à jour GPS...</div>
+      ) : commandesEnRoute.length === 0 ? (
+        <div className="bg-zinc-900/50 border border-zinc-800 rounded-3xl p-8 text-center mt-6">
+          <span className="text-5xl block mb-4">☕</span>
+          <p className="text-gray-400 font-medium">Aucune commande en cours.</p>
+          <p className="text-sm text-gray-500 mt-2">Restez à l'affût des assignations !</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {commandesEnRoute.map((cmd) => (
+            <div key={cmd.id} className="bg-zinc-900 border border-zinc-800 rounded-3xl overflow-hidden shadow-xl">
+              {/* Entête de la carte */}
+              <div className="bg-purple-600 p-4 flex justify-between items-center">
+                <span className="bg-black/20 text-white px-3 py-1 rounded-lg font-mono font-bold text-sm">#{cmd.id}</span>
+                <span className="font-black text-xl">{cmd.total} DA</span>
               </div>
-            ))}
-          </div>
-        )}
-      </main>
+              
+              {/* Corps de la carte */}
+              <div className="p-5 space-y-4">
+                <div>
+                  <p className="text-xs uppercase tracking-widest text-gray-500 font-bold mb-1">Client</p>
+                  <p className="text-lg font-bold">{cmd.nom_client}</p>
+                  <a href={`tel:${cmd.telephone_client}`} className="inline-flex items-center gap-2 bg-zinc-800 text-blue-400 px-4 py-2 rounded-xl mt-2 font-bold w-full justify-center border border-zinc-700">
+                    📞 Appeler : {cmd.telephone_client}
+                  </a>
+                </div>
+
+                <div>
+                  <p className="text-xs uppercase tracking-widest text-gray-500 font-bold mb-1">📍 Adresse</p>
+                  <p className="text-gray-300 bg-zinc-950 p-3 rounded-xl border border-zinc-800 font-medium">{cmd.adresse_livraison}</p>
+                </div>
+
+                <div>
+                  <p className="text-xs uppercase tracking-widest text-gray-500 font-bold mb-1">Détails repas</p>
+                  <p className="text-sm text-gray-400 bg-zinc-950 p-3 rounded-xl border border-zinc-800 whitespace-pre-wrap">{cmd.details_commande}</p>
+                </div>
+
+                <button onClick={() => marquerCommeLivre(cmd.id)} className="w-full bg-green-600 hover:bg-green-700 text-white font-black py-5 rounded-2xl uppercase tracking-wider text-sm shadow-lg shadow-green-600/20 active:scale-95 transition-all mt-4">
+                  ✅ Valider la livraison
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

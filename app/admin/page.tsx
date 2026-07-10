@@ -3,11 +3,18 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+// Initialisation sécurisée
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.error("Erreur : Les variables d'environnement Supabase sont manquantes.");
+}
+
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-const BUCKET_NAME = "produits"; 
+// LE COUPABLE ÉTAIT ICI : Remplacé "produits" par "images" pour correspondre à votre base de données
+const BUCKET_NAME = "images"; 
 
 export default function AdminDashboard() {
   const [estAdminAuthentifie, setEstAdminAuthentifie] = useState(false);
@@ -54,27 +61,45 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     if (estAdminAuthentifie) {
-      fetchCommandes(); fetchCategories(); fetchProduits(); fetchLivreurs();
+      // Optimisation : Chargement de toutes les données en parallèle
+      Promise.all([
+        fetchCommandes(), 
+        fetchCategories(), 
+        fetchProduits(), 
+        fetchLivreurs()
+      ]);
     }
   }, [estAdminAuthentifie]);
 
   const handleAdminLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (saisieCodeAdmin === "admin123") { setEstAdminAuthentifie(true); localStorage.setItem("adminAuth", "true"); } 
-    else alert("❌ Code administrateur incorrect !");
+    if (saisieCodeAdmin === "admin123") { 
+      setEstAdminAuthentifie(true); 
+      localStorage.setItem("adminAuth", "true"); 
+    } else {
+      alert("❌ Code administrateur incorrect !");
+    }
   };
 
   async function fetchCategories() {
     const { data, error } = await supabase.from("categories").select("*").order("id", { ascending: true });
-    if (!error && data) { setCategories(data); if (data.length > 0 && !categorieSelected) setCategorieSelected(data[0].nom); }
+    if (!error && data) { 
+      setCategories(data); 
+      if (data.length > 0 && !categorieSelected) setCategorieSelected(data[0].nom); 
+    }
   }
 
   async function handleAjouterCategorie(e: React.FormEvent) {
     e.preventDefault(); setMessageCategorie(null);
     if (!nomNouvelleCategorie.trim()) return;
     const { error } = await supabase.from("categories").insert([{ nom: nomNouvelleCategorie.trim() }]);
-    if (!error) { setMessageCategorie({ type: "success", text: "Catégorie ajoutée !" }); setNomNouvelleCategorie(""); fetchCategories(); } 
-    else setMessageCategorie({ type: "error", text: "Erreur : " + error.message });
+    if (!error) { 
+      setMessageCategorie({ type: "success", text: "Catégorie ajoutée !" }); 
+      setNomNouvelleCategorie(""); 
+      fetchCategories(); 
+    } else {
+      setMessageCategorie({ type: "error", text: "Erreur : " + error.message });
+    }
   }
 
   async function handleSupprimerCategorie(id: number, nom: string) {
@@ -136,12 +161,17 @@ export default function AdminDashboard() {
   }
 
   const chargerFormulairePourModification = (produit: any) => {
-    setEditingProduit(produit); setTitre(produit.titre || produit.nom || "");
-    setDescription(produit.description || ""); setPrix(produit.prix?.toString() || "");
+    setEditingProduit(produit); 
+    setTitre(produit.titre || produit.nom || "");
+    setDescription(produit.description || ""); 
+    setPrix(produit.prix?.toString() || "");
     setCategorieSelected(produit.categorie || (categories.length > 0 ? categories[0].nom : ""));
     setImageUrl(produit.image_url || "");
-    setVariantes(produit.variantes || []); setSupplements(produit.supplements || []); 
-    setImageFile(null); setMessageMenu(null); window.scrollTo({ top: 0, behavior: "smooth" });
+    setVariantes(produit.variantes || []); 
+    setSupplements(produit.supplements || []); 
+    setImageFile(null); 
+    setMessageMenu(null); 
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const annulerModification = () => {
@@ -152,31 +182,60 @@ export default function AdminDashboard() {
   };
 
   const handleMenuSubmit = async (e: React.FormEvent) => {
-    e.preventDefault(); setUploading(true); setMessageMenu(null);
+    e.preventDefault(); 
+    setUploading(true); 
+    setMessageMenu(null);
     try {
       let finalImageUrl = imageUrl;
+      
+      // LOGIQUE D'UPLOAD CORRIGÉE
       if (imageFile) {
         const fileExt = imageFile.name.split('.').pop();
-        const fileName = `${Math.random().toString(36).substring(2, 15)}_${Date.now()}.${fileExt}`;
-        const { error: uploadError } = await supabase.storage.from(BUCKET_NAME).upload(fileName, imageFile);
-        if (uploadError) throw new Error(`Erreur image : ${uploadError.message}`);
-        const { data: publicUrlData } = supabase.storage.from(BUCKET_NAME).getPublicUrl(fileName);
+        // Utilisation de crypto.randomUUID pour garantir un nom unique sans conflit
+        const fileName = `${crypto.randomUUID()}.${fileExt}`;
+        
+        const { error: uploadError } = await supabase.storage
+          .from(BUCKET_NAME) // Utilise désormais "images"
+          .upload(fileName, imageFile);
+          
+        if (uploadError) throw new Error(`Erreur upload image : ${uploadError.message}`);
+        
+        const { data: publicUrlData } = supabase.storage
+          .from(BUCKET_NAME)
+          .getPublicUrl(fileName);
+          
         finalImageUrl = publicUrlData.publicUrl;
       }
+
       const donneesProduit = { 
-        nom: titre, titre: titre, description: description, prix: parseFloat(prix), categorie: categorieSelected, 
-        image_url: finalImageUrl, variantes: variantes, supplements: supplements 
+        nom: titre, 
+        titre: titre, 
+        description: description, 
+        prix: parseFloat(prix), 
+        categorie: categorieSelected, 
+        image_url: finalImageUrl, 
+        variantes: variantes, 
+        supplements: supplements 
       };
+
       if (editingProduit) {
         const { error } = await supabase.from("produits").update(donneesProduit).eq("id", editingProduit.id);
-        if (error) throw error; setMessageMenu({ type: "success", text: "🔄 Produit mis à jour !" });
+        if (error) throw error; 
+        setMessageMenu({ type: "success", text: "🔄 Produit mis à jour !" });
       } else {
         const { error = null } = await supabase.from("produits").insert([donneesProduit]);
-        if (error) throw error; setMessageMenu({ type: "success", text: "✅ Produit ajouté !" });
+        if (error) throw error; 
+        setMessageMenu({ type: "success", text: "✅ Produit ajouté !" });
       }
-      annulerModification(); fetchProduits();
-    } catch (error: any) { setMessageMenu({ type: "error", text: "❌ " + error.message }); } 
-    finally { setUploading(false); }
+      
+      annulerModification(); 
+      fetchProduits();
+      
+    } catch (error: any) { 
+      setMessageMenu({ type: "error", text: "❌ " + error.message }); 
+    } finally { 
+      setUploading(false); 
+    }
   };
 
   const handleSupprimerProduit = async (id: number, nomProduit: string) => {
@@ -216,10 +275,13 @@ export default function AdminDashboard() {
           <button onClick={() => setOngletActif("livreurs")} className={`py-3 px-5 rounded-xl font-bold uppercase tracking-wider transition-all text-xs md:text-sm ${ongletActif === "livreurs" ? "bg-red-600 text-white shadow-lg" : "bg-zinc-900 text-gray-400 border border-zinc-800"}`}>Livreurs ({livreurs.length})</button>
         </div>
 
-        {/* ONTLET 1 : COMMANDES (MODIFIÉ POUR METTRE EN VALEUR LA NOTE DU CLIENT) */}
+        {/* ONGLET 1 : COMMANDES */}
         {ongletActif === "commandes" && (
            <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 shadow-xl">
-             <div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold uppercase tracking-wider text-gray-300">Suivi des commandes</h2><button onClick={fetchCommandes} className="bg-zinc-800 hover:bg-zinc-700 text-xs font-bold py-2 px-4 rounded-lg uppercase">🔄 Rafraîchir</button></div>
+             <div className="flex justify-between items-center mb-6">
+               <h2 className="text-2xl font-bold uppercase tracking-wider text-gray-300">Suivi des commandes</h2>
+               <button onClick={fetchCommandes} className="bg-zinc-800 hover:bg-zinc-700 text-xs font-bold py-2 px-4 rounded-lg uppercase">🔄 Rafraîchir</button>
+             </div>
              {chargementCommandes ? ( <div className="text-center py-12 text-gray-500 animate-pulse">Chargement...</div> ) : commandes.length === 0 ? ( <p className="text-gray-500 text-center py-12">Aucune commande pour le moment.</p> ) : (
                <div className="space-y-4">
                  {commandes.map((cmd) => {
@@ -235,7 +297,6 @@ export default function AdminDashboard() {
                          <p className="text-sm text-red-500 font-bold">📞 {cmd.telephone_client || cmd.telephone}</p>
                          <p className="text-sm text-gray-400">📍 {cmd.adresse_livraison || cmd.adresse}</p>
                          
-                         {/* L'AFFICHAGE GÈRE PARFAITEMENT LA REMARQUE / NOTE DU CLIENT SANS SOUCI */}
                          <div className="bg-zinc-900/50 p-3 rounded-lg border border-zinc-800/50 mt-2">
                            <p className="text-xs text-gray-500 uppercase font-bold mb-1">Détails de la commande :</p>
                            <p className="text-sm text-gray-300 font-medium whitespace-pre-wrap">{cmd.details_commande}</p>
@@ -266,7 +327,7 @@ export default function AdminDashboard() {
            </div>
         )}
 
-        {/* ONTLET 2 : CATEGORIES */}
+        {/* ONGLET 2 : CATEGORIES */}
         {ongletActif === "categories" && (
            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
              <div className="lg:col-span-1 bg-zinc-900 border border-zinc-800 rounded-2xl p-6 shadow-xl h-fit">
@@ -291,7 +352,7 @@ export default function AdminDashboard() {
            </div>
         )}
 
-        {/* ONTLET 3 : MENU */}
+        {/* ONGLET 3 : MENU */}
         {ongletActif === "menu" && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             <div className="lg:col-span-1 bg-zinc-900 border border-zinc-800 rounded-2xl p-6 shadow-xl h-fit lg:sticky lg:top-6">
@@ -306,7 +367,7 @@ export default function AdminDashboard() {
                 </div>
                 <div><label className="block text-xs font-bold uppercase text-gray-400 mb-2">Prix de base (DA)</label><input type="number" required value={prix} onChange={(e) => setPrix(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-white outline-none" /></div>
                 
-                {/* 1. TYPES (VARIANTES) - Choix Unique */}
+                {/* 1. TYPES (VARIANTES) */}
                 <div className="bg-black/40 border border-zinc-800 p-4 rounded-xl">
                   <label className="block text-xs font-bold uppercase text-blue-500 mb-1">🏷️ Les Types (Choix Unique)</label>
                   <p className="text-[10px] text-gray-500 mb-3">Ex: Chocolat Blanc (0 DA), Nutella (+50 DA)... Le client DOIT en choisir un.</p>
@@ -320,7 +381,7 @@ export default function AdminDashboard() {
                   ))}
                 </div>
 
-                {/* 2. EXTRAS (SUPPLEMENTS) - Choix Multiple */}
+                {/* 2. EXTRAS (SUPPLEMENTS) */}
                 <div className="bg-black/40 border border-zinc-800 p-4 rounded-xl">
                   <label className="block text-xs font-bold uppercase text-amber-500 mb-1">➕ Les Extras (Choix Multiples)</label>
                   <p className="text-[10px] text-gray-500 mb-3">Ex: Fraise (+100 DA), Banane (+100 DA)... Le client peut en cocher plusieurs.</p>
@@ -372,7 +433,7 @@ export default function AdminDashboard() {
           </div>
         )}
         
-        {/* ONTLET 4 : LIVREURS */}
+        {/* ONGLET 4 : LIVREURS */}
         {ongletActif === "livreurs" && (
            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
              <div className="lg:col-span-1 bg-zinc-900 border border-zinc-800 rounded-2xl p-6 shadow-xl h-fit">
